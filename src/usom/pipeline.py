@@ -1,9 +1,11 @@
 """Build the dataset and run the full grid: `uv run python -m usom.pipeline`.
 
 Outputs (parquet, under data/results/):
-- picks.parquet    every basket's members at every formation date, per scheme and lookback
-- returns.parquet  monthly portfolio returns per scheme, lookback, holding and basket
-- monthly.parquet  coverage, SPY and factor data on the same monthly calendar
+- groups.parquet    each month's groups per scheme
+- picks.parquet     every basket's members at every formation date, per scheme and lookback
+- returns.parquet   monthly portfolio returns per scheme, lookback, holding and basket
+- outcomes.parquet  each scored pick's H-month return beside its group's and the universe's
+- monthly.parquet   coverage, SPY and factor data on the same monthly calendar
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from usom.backtest import (
     forward_returns,
     month_end_dates,
     next_month_end,
+    pick_outcomes,
     run_portfolio,
 )
 from usom.classify import fetch_classification
@@ -59,7 +62,7 @@ def load_dataset(refresh_membership: bool = False) -> Dataset:
         [*tickers, config.BENCHMARK], config.PRICE_START, config.CACHE / "prices.parquet"
     )
     close = drop_spikes(close)
-    # Membership data ends at its last change row; stop one month after it.
+    # Membership is only known up to its last change row; stop at the end of that month.
     last = membership.index[-1] + pd.offsets.MonthEnd(1)
     signal_dates = month_end_dates(close.index[close.index <= last])
 
@@ -113,26 +116,38 @@ def form_all(ds: Dataset, groups: pd.DataFrame, lookback: int, cfg: StudyConfig)
     return pd.concat(frames, ignore_index=True)
 
 
-def run_grid(ds: Dataset, cfg: StudyConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
+# Baskets whose individual picks are scored against their own group, and the basket
+# holding that whole group.
+SCORED = {"hot_laggards": "hot_all", "hot_leaders": "hot_all", "cold_laggards": "cold_all"}
+
+
+def run_grid(ds: Dataset, cfg: StudyConfig) -> dict[str, pd.DataFrame]:
+    """All results of the study, keyed by the name they are saved under."""
     fwd = forward_returns(ds.close.reindex(columns=ds.eligible.columns), ds.signal_dates)
-    picks_all, returns_all = [], []
+    out: dict[str, list[pd.DataFrame]] = {"groups": [], "picks": [], "returns": [], "outcomes": []}
     for scheme in cfg.schemes:
         log.info("groups: %s", scheme)
         groups = group_panel(ds, scheme, cfg)
+        out["groups"].append(groups.assign(scheme=scheme))
         for lookback in cfg.lookbacks:
             log.info("baskets: %s, %d-month lookback", scheme, lookback)
             picks = form_all(ds, groups, lookback, cfg)
-            picks_all.append(picks.assign(scheme=scheme, lookback=lookback))
+            keys = {"scheme": scheme, "lookback": lookback}
+            out["picks"].append(picks.assign(**keys))
             for basket, p in picks.groupby("basket"):
                 w = cohort_weights(p, fwd.index, fwd.columns)
                 for holding in cfg.holdings:
                     res = run_portfolio(w, fwd, holding, cfg.cost_bps)
-                    returns_all.append(
+                    out["returns"].append(
                         res.rename_axis("month")
                         .reset_index()
-                        .assign(scheme=scheme, lookback=lookback, holding=holding, basket=basket)
+                        .assign(**keys, holding=holding, basket=basket)
                     )
-    return pd.concat(picks_all, ignore_index=True), pd.concat(returns_all, ignore_index=True)
+            for holding in cfg.holdings:
+                for basket, peers in SCORED.items():
+                    o = pick_outcomes(picks, fwd, holding, basket, peers)
+                    out["outcomes"].append(o.assign(**keys, holding=holding))
+    return {name: pd.concat(frames, ignore_index=True) for name, frames in out.items()}
 
 
 def monthly_frame(ds: Dataset) -> pd.DataFrame:
@@ -160,14 +175,12 @@ def main() -> None:
 
     cfg = StudyConfig()
     ds = load_dataset(args.refresh_membership)
-    picks, returns = run_grid(ds, cfg)
+    results = run_grid(ds, cfg)
+    results["monthly"] = monthly_frame(ds)
     config.RESULTS.mkdir(parents=True, exist_ok=True)
-    picks.to_parquet(config.RESULTS / "picks.parquet")
-    returns.to_parquet(config.RESULTS / "returns.parquet")
-    monthly_frame(ds).to_parquet(config.RESULTS / "monthly.parquet")
-    log.info(
-        "wrote %d picks and %d monthly returns to %s", len(picks), len(returns), config.RESULTS
-    )
+    for name, frame in results.items():
+        frame.to_parquet(config.RESULTS / f"{name}.parquet")
+        log.info("wrote %s: %d rows", name, len(frame))
 
 
 if __name__ == "__main__":

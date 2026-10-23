@@ -84,3 +84,25 @@ def test_holding_returns_compound_forward():
     assert h.iloc[0] == pytest.approx(1.1 * 1.2 - 1)
     assert h.iloc[2] == pytest.approx(0.9 - 1)
     assert pd.isna(h.iloc[3])
+
+
+def test_pick_outcomes_compare_each_pick_with_its_group_and_universe():
+    from usom.backtest import pick_outcomes
+
+    idx = pd.date_range("2020-01-31", periods=3, freq="ME")
+    fwd = pd.DataFrame({"A": [0.1, 0.0, 0.0], "B": [0.3, 0.0, 0.0], "C": [-0.1, 0.0, 0.0]}, idx)
+    d = idx[0]
+    picks = pd.DataFrame(
+        {
+            "date": [d] * 6,
+            "basket": ["hot_laggards", "hot_all", "hot_all", "universe", "universe", "universe"],
+            "ticker": ["A", "A", "B", "A", "B", "C"],
+            "group": ["G", "G", "G", "G", "G", "H"],
+        }
+    )
+    out = pick_outcomes(picks, fwd, holding=1, basket="hot_laggards", peers="hot_all")
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert (row.ticker, row.ret) == ("A", pytest.approx(0.1))
+    assert row.group_ret == pytest.approx(0.2)
+    assert row.universe_ret == pytest.approx(0.1)

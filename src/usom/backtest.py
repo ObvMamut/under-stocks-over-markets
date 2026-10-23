@@ -92,3 +92,28 @@ def holding_returns(fwd: pd.DataFrame, holding: int) -> pd.DataFrame:
     log = np.log1p(fwd)
     ahead = log[::-1].rolling(holding, min_periods=holding).sum()[::-1]
     return np.expm1(ahead)
+
+
+def pick_outcomes(
+    picks: pd.DataFrame, fwd: pd.DataFrame, holding: int, basket: str, peers: str
+) -> pd.DataFrame:
+    """Each pick's H-month return beside its group's and the universe's equal-weight return.
+
+    `picks` holds rows (date, basket, ticker, group); the group return averages the
+    `peers` basket rows of the same date and group (e.g. hot_all for hot_laggards).
+    """
+    h = holding_returns(fwd, holding).stack().rename("ret")
+    h.index.names = ["date", "ticker"]
+    tagged = picks.join(h, on=["date", "ticker"])
+    group_ret = (
+        tagged[tagged["basket"] == peers]
+        .groupby(["date", "group"])["ret"]
+        .mean()
+        .rename("group_ret")
+    )
+    universe_ret = (
+        tagged[tagged["basket"] == "universe"].groupby("date")["ret"].mean().rename("universe_ret")
+    )
+    out = tagged[tagged["basket"] == basket].join(group_ret, on=["date", "group"])
+    out = out.join(universe_ret, on="date")
+    return out.dropna(subset=["ret", "group_ret", "universe_ret"]).reset_index(drop=True)

@@ -25,6 +25,7 @@ BASKET_COLORS = {
     "hot_leaders": "#eb6834",
     "hot_all": "#1baf7a",
     "cold_laggards": "#eda100",
+    "improved": "#e87ba4",
     "universe": MUTED,
     "spy": INK_2,
 }
@@ -36,8 +37,11 @@ BASKET_NAMES = {
     "cold_all": "Whole cold sector",
     "all_laggards": "Laggards, every sector",
     "universe_laggards": "Laggards, whole index",
+    "universe_leaders": "Leaders, whole index",
     "universe": "Equal-weight S&P 500",
     "spy": "SPY",
+    "switch": "Regime switch",
+    "improved": "Improved strategy",
 }
 SCHEME_COLORS = {"sector": "#2a78d6", "industry": "#eb6834", "cluster": "#1baf7a"}
 SCHEME_NAMES = {
@@ -143,8 +147,8 @@ def coverage_chart(coverage: pd.Series, threshold: float, main_start: pd.Timesta
     return fig
 
 
-def growth_chart(returns: dict[str, pd.Series], title: str):
-    """Value of $1 (log scale) above drawdowns, one line per basket."""
+def growth_chart(returns: dict[str, pd.Series], title: str, main: str = "hot_laggards"):
+    """Value of $1 (log scale) above drawdowns, one line per basket; `main` is emphasised."""
     from usom.analysis import drawdown, growth
 
     fig, (top, bottom) = plt.subplots(
@@ -154,13 +158,13 @@ def growth_chart(returns: dict[str, pd.Series], title: str):
     for key, r in returns.items():
         g = growth(r)
         color = BASKET_COLORS.get(key, MUTED)
-        main = key == "hot_laggards"
+        emphasised = key == main
         top.plot(
             g.index,
             g.to_numpy(),
             color=color,
-            linewidth=2.4 if main else 1.6,
-            zorder=4 if main else 2,
+            linewidth=2.4 if emphasised else 1.6,
+            zorder=4 if emphasised else 2,
             label=BASKET_NAMES[key],
         )
         dd = drawdown(r)
@@ -170,7 +174,7 @@ def growth_chart(returns: dict[str, pd.Series], title: str):
     top.yaxis.set_major_locator(mpl.ticker.LogLocator(subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)))
     top.yaxis.set_major_formatter(mpl.ticker.FuncFormatter(lambda v, _: f"${v:g}"))
     top.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
-    _end_labels(top, curves, min_gap=0.035, priority=(BASKET_NAMES["hot_laggards"],))
+    _end_labels(top, curves, min_gap=0.035, priority=(BASKET_NAMES[main],))
     top.set_title(title)
     top.set_ylabel("value of $1")
     top.legend(loc="upper left", ncols=2, fontsize=9)
@@ -218,18 +222,34 @@ def spread_heatmaps(spreads: pd.DataFrame, spread: str, title: str):
     return fig
 
 
-def spread_strips(spreads: pd.DataFrame, title: str):
-    """Every grid cell's annualised spread as a dot, per spread and scheme."""
+def spread_strips(
+    spreads: pd.DataFrame,
+    title: str,
+    order: list[str] | None = None,
+    highlight: pd.DataFrame | None = None,
+    ax=None,
+    legend: bool = True,
+):
+    """Every grid cell's annualised spread as a dot, per spread (row) and scheme (colour).
+
+    `order` sets the rows (default: the main study's SPREADS); `highlight` rows
+    (spread, ann) are drawn as hollow diamonds, e.g. the cell chosen in-sample.
+    """
     from usom.analysis import SPREADS
 
-    names = list(SPREADS)
+    names = order or list(SPREADS)
     schemes = [k for k in SCHEME_NAMES if k in set(spreads["scheme"])]
-    fig, ax = plt.subplots(figsize=(9.5, 0.75 * len(names) + 1.4))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(9.5, 0.75 * len(names) + 1.4))
+    else:
+        fig = ax.figure
     offsets = np.linspace(-0.22, 0.22, len(schemes))
     for off, scheme in zip(offsets, schemes, strict=True):
         s = spreads[spreads["scheme"] == scheme]
         for i, name in enumerate(names):
             v = s.loc[s["spread"] == name, "ann"].to_numpy()
+            if len(v) == 0:
+                continue
             ax.scatter(
                 v,
                 np.full(len(v), i + off),
@@ -248,14 +268,66 @@ def spread_strips(spreads: pd.DataFrame, title: str):
                 linewidth=2,
                 zorder=4,
             )
+    if highlight is not None:
+        for i, name in enumerate(names):
+            v = highlight.loc[highlight["spread"] == name, "ann"].to_numpy()
+            ax.scatter(
+                v,
+                np.full(len(v), i),
+                s=90,
+                marker="D",
+                facecolor="none",
+                edgecolor=INK,
+                linewidth=1.5,
+                zorder=5,
+                label="cell chosen in-sample" if i == 0 else None,
+            )
     ax.axvline(0, color=AXIS, linewidth=1)
     ax.set_yticks(range(len(names)), names)
+    if not ax.yaxis_inverted():  # a shared y-axis is already inverted by its sibling
+        ax.invert_yaxis()
+    ax.grid(axis="y", visible=False)
+    _pct_axis(ax, "x")
+    ax.set_xlabel("annualised long/short return  (dot = one cell, bar = median)")
+    ax.set_title(title, pad=28 if legend else 6)
+    if legend:
+        ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncols=4, fontsize=9, borderaxespad=0.2)
+    fig.tight_layout()
+    return fig
+
+
+def state_dots(table: pd.DataFrame, title: str):
+    """Mean monthly spread (± 2 standard errors) by market state, in- vs out-of-sample.
+
+    `table` rows: state, window, mean, se.
+    """
+    colors = {"in-sample": MUTED, "out-of-sample": BASKET_COLORS["hot_laggards"]}
+    states = list(dict.fromkeys(table["state"]))
+    fig, ax = plt.subplots(figsize=(8.5, 0.8 * len(states) + 1.5))
+    for off, (win, g) in zip((-0.12, 0.12), table.groupby("window", sort=False), strict=False):
+        g = g.set_index("state").reindex(states)
+        y = np.arange(len(states)) + off
+        ax.errorbar(
+            g["mean"] * 12,
+            y,
+            xerr=2 * g["se"] * 12,
+            fmt="o",
+            color=colors[win],
+            ecolor=colors[win],
+            elinewidth=1.5,
+            capsize=0,
+            markersize=7,
+            markeredgecolor=SURFACE,
+            label=win,
+        )
+    ax.axvline(0, color=AXIS, linewidth=1)
+    ax.set_yticks(range(len(states)), states)
     ax.invert_yaxis()
     ax.grid(axis="y", visible=False)
     _pct_axis(ax, "x")
-    ax.set_xlabel("annualised long/short return  (dot = one lookback × holding cell, bar = median)")
+    ax.set_xlabel("hot-sector laggards minus hot-sector leaders, annualised (± 2 s.e.)")
     ax.set_title(title, pad=28)
-    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncols=3, fontsize=9, borderaxespad=0.2)
+    ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncols=2, fontsize=9, borderaxespad=0.2)
     fig.tight_layout()
     return fig
 

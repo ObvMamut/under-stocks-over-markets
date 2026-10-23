@@ -4,7 +4,8 @@ A backtest of one stock-picking idea: **among S&P 500 stocks, find the sectors t
 hot and buy the weakest stocks inside them**, betting that the laggards of a strong group catch
 up with it.
 
-The analysis, with every chart, is in [`notebooks/analysis.ipynb`](notebooks/analysis.ipynb).
+The analysis, with every chart, is in [`notebooks/analysis.ipynb`](notebooks/analysis.ipynb). Five
+attempts to fix the idea are tested in [`notebooks/hypotheses.ipynb`](notebooks/hypotheses.ipynb).
 
 ## Result
 
@@ -22,6 +23,29 @@ index members have usable prices), after 10 bp costs:
   returned +11% over the next 3 months, against +31% for the leaders.
 - **Earlier years:** the idea looked mildly positive in 2005–2017. That's the stretch where many failed
   companies are missing from the data, a bias that flatters buying losers.
+
+## Five attempts to fix it
+
+Each fix is grounded in published research and tested the same way. The best setting is chosen on
+2005–2017 alone, then that single setting is tested on 2017–2026 with a Holm correction for trying five
+ideas.
+
+| | Change | In-sample | Out-of-sample |
+|---|---|---|---|
+| H1 | rank groups on 3–12 months, laggards on 1 month (industry momentum vs. within-industry reversal) | fails | −0.8%/yr |
+| H2 | skip laggards that fell on news (a jump in stock-specific volatility) | passes | −0.7%/yr |
+| H3 | only laggards from broad-based rallies | fails | +3.5%/yr, not significant |
+| H4 | hot-group leaders instead of plain stock momentum | fails | −1.3%/yr |
+| H5 | laggards in volatile markets, leaders otherwise | passes | +2.0%/yr, not significant |
+
+**None is confirmed.** A blend of the two that passed in-sample made 13.7%/yr out-of-sample, against
+12.0% for the equal-weight index (t = 0.7). That's still behind hot-sector leaders (15.6%) and SPY (14.9%).
+
+Two things held in both periods:
+- Laggards that fell on news trailed the index (−2.9% and −2.2%/yr).
+- After a falling year, laggards beat leaders inside hot groups, though on few months.
+
+Neither turns laggard-buying into an edge. No laggard sub-basket beat the index in either period.
 
 ## What it does
 
@@ -45,14 +69,15 @@ Every data source is free and needs no API key: GitHub raw files, Yahoo, and the
 ```sh
 uv sync
 uv run python -m usom.pipeline          # downloads and caches data, runs the grid (~10 min the first time)
-uv run jupyter lab notebooks/analysis.ipynb
+uv run python -m usom.experiments       # the five hypotheses (~8 min)
+uv run jupyter lab notebooks/
 ```
 
 Downloads are cached under `data/` (git-ignored), so reruns are fast. To re-execute the notebook
 headless:
 
 ```sh
-uv run jupyter nbconvert --to notebook --execute --inplace notebooks/analysis.ipynb
+uv run jupyter nbconvert --to notebook --execute --inplace notebooks/*.ipynb
 ```
 
 Checks:
@@ -75,6 +100,8 @@ uv run ruff format --check . && uv run ruff check . && uv run pytest -q
 | `src/usom/metrics.py`, `analysis.py` | statistics and result tables |
 | `src/usom/plots.py` | charts |
 | `src/usom/pipeline.py` | end-to-end run that writes `data/results/*.parquet` |
+| `src/usom/features.py` | point-in-time market state, abnormal volatility, group breadth |
+| `src/usom/experiments.py` | the five hypotheses, pre-registered scoring, Holm correction |
 | `tests/` | synthetic-data tests, including a no-lookahead check |
 
 ## Limitations

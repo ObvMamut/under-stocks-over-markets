@@ -102,17 +102,58 @@ def group_panel(ds: Dataset, scheme: str, cfg: StudyConfig) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def form_all(ds: Dataset, groups: pd.DataFrame, lookback: int, cfg: StudyConfig) -> pd.DataFrame:
-    """Every basket's members at every formation date for one scheme and lookback."""
+def form_all(
+    ds: Dataset,
+    groups: pd.DataFrame,
+    lookback: int,
+    cfg: StudyConfig,
+    group_lookback: int | None = None,
+    tags: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Every basket's members at every formation date for one scheme and lookback.
+
+    `group_lookback` ranks groups over a different horizon than stocks; `tags` (dates x
+    tickers of labels) splits hot-group laggards into `hot_laggards_<label>` baskets.
+    """
     rets = lookback_returns(ds, lookback)
+    group_rets = None if group_lookback is None else lookback_returns(ds, group_lookback)
     by_date = dict(tuple(groups.groupby("date")))
     frames = []
     for date in ds.signal_dates:
         if date not in by_date:
             continue
         g = by_date[date].set_index("ticker")["group"]
-        b = form_baskets(g, rets.loc[date], cfg.hot_frac, cfg.tail_frac, cfg.min_group_size)
+        b = form_baskets(
+            g,
+            rets.loc[date],
+            cfg.hot_frac,
+            cfg.tail_frac,
+            cfg.min_group_size,
+            group_ret=None if group_rets is None else group_rets.loc[date],
+            tags=None if tags is None else tags.loc[date],
+        )
         frames.append(b.assign(date=date))
+    return pd.concat(frames, ignore_index=True)
+
+
+def basket_returns(
+    picks: pd.DataFrame,
+    fwd: pd.DataFrame,
+    holdings: tuple[int, ...],
+    cost_bps: float,
+    baskets: tuple[str, ...] | None = None,
+) -> pd.DataFrame:
+    """Monthly portfolio returns for each basket in `picks` (or just `baskets`) and holding."""
+    frames = []
+    for basket, p in picks.groupby("basket"):
+        if baskets is not None and basket not in baskets:
+            continue
+        w = cohort_weights(p, fwd.index, fwd.columns)
+        for holding in holdings:
+            res = run_portfolio(w, fwd, holding, cost_bps)
+            frames.append(
+                res.rename_axis("month").reset_index().assign(holding=holding, basket=basket)
+            )
     return pd.concat(frames, ignore_index=True)
 
 
@@ -134,15 +175,8 @@ def run_grid(ds: Dataset, cfg: StudyConfig) -> dict[str, pd.DataFrame]:
             picks = form_all(ds, groups, lookback, cfg)
             keys = {"scheme": scheme, "lookback": lookback}
             out["picks"].append(picks.assign(**keys))
-            for basket, p in picks.groupby("basket"):
-                w = cohort_weights(p, fwd.index, fwd.columns)
-                for holding in cfg.holdings:
-                    res = run_portfolio(w, fwd, holding, cfg.cost_bps)
-                    out["returns"].append(
-                        res.rename_axis("month")
-                        .reset_index()
-                        .assign(**keys, holding=holding, basket=basket)
-                    )
+            res = basket_returns(picks, fwd, cfg.holdings, cfg.cost_bps)
+            out["returns"].append(res.assign(**keys))
             for holding in cfg.holdings:
                 for basket, peers in SCORED.items():
                     o = pick_outcomes(picks, fwd, holding, basket, peers)

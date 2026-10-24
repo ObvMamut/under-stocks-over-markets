@@ -9,6 +9,12 @@ attempts to fix the idea are tested in [`notebooks/hypotheses.ipynb`](notebooks/
 
 ## Result
 
+![Growth of $1 from Oct 2017 to Aug 2026, with drawdowns below: hot-sector laggards end level with the equal-weight S&P 500, behind hot-sector leaders and SPY; cold-sector laggards trail everything](docs/figures/oos-growth.png)
+
+*The setting that did best in 2005–2017 (broad sectors, 6-month lookback, 3-month hold), run on
+2017–2026. The laggards made 13.1%/yr, against 12.0% for the equal-weight index, 14.9% for SPY and 15.6%
+for the leaders they passed over.*
+
 **The idea doesn't hold up.** Out-of-sample (Oct 2017 – Aug 2026, the years where ≥80% of point-in-time
 index members have usable prices), after 10 bp costs:
 
@@ -24,6 +30,12 @@ index members have usable prices), after 10 bp costs:
 - **Earlier years:** the idea looked mildly positive in 2005–2017. That's the stretch where many failed
   companies are missing from the data, a bias that flatters buying losers.
 
+![Out-of-sample long/short spreads for all 36 grid cells, one row per comparison: hot laggards vs market and hot laggards vs hot leaders sit almost entirely below zero](docs/figures/oos-grid.png)
+
+*Every out-of-sample cell (4 lookbacks × 3 holding periods × 3 sector definitions), net of costs. Dot =
+one cell, bar = median. "Hot laggards vs market" is below zero in 30 of 36 cells, "hot laggards vs hot
+leaders" in 35.*
+
 ## Five attempts to fix it
 
 Each fix is grounded in published research and tested the same way. The best setting is chosen on
@@ -37,6 +49,11 @@ ideas.
 | H3 | only laggards from broad-based rallies | fails | +3.5%/yr, not significant |
 | H4 | hot-group leaders instead of plain stock momentum | fails | −1.3%/yr |
 | H5 | laggards in volatile markets, leaders otherwise | passes | +2.0%/yr, not significant |
+
+![Each hypothesis's grid cells in 2005–2017 (left) and 2017–2026 (right): H2 and H5 sit right of zero in-sample, then straddle zero out-of-sample](docs/figures/hypotheses.png)
+
+*Each dot is one cell of a hypothesis's family; diamonds mark the cells chosen in-sample. A real effect
+would sit right of zero in both panels. H2 and H5 do in-sample, then straddle zero out-of-sample.*
 
 **None is confirmed.** A blend of the two that passed in-sample made 13.7%/yr out-of-sample, against
 12.0% for the equal-weight index (t = 0.7). That's still behind hot-sector leaders (15.6%) and SPY (14.9%).
@@ -103,13 +120,17 @@ uv run ruff format --check . && uv run ruff check . && uv run pytest -q
 | `src/usom/features.py` | point-in-time market state, abnormal volatility, group breadth |
 | `src/usom/experiments.py` | the five hypotheses, pre-registered scoring, Holm correction |
 | `tests/` | synthetic-data tests, including a no-lookahead check |
+| `docs/figures/` | charts used in this README, exported from the executed notebooks |
 
 ## Limitations
 
 - **Survivorship bias.** Yahoo has no history for most delisted companies. Coverage of point-in-time members is
-  under 60% before 2008 and only passes 80% in 2018, so the main results use 2018 onward and the earlier
-  years are only used to choose parameters. Stocks that stop trading are held as cash at their last
-  quote (no delisting returns).
+  under 60% before 2008 and only passes 80% in late 2017, so the main results start in October 2017 and
+  the earlier years are only used to choose parameters. Stocks that stop trading are held as cash at their
+  last quote (no delisting returns).
+
+  ![Share of each month's S&P 500 members with usable Yahoo prices, rising from about 43% in 1998 to 98% in 2026, with the main sample starting at the 80% line in Oct 2017](docs/figures/coverage.png)
+
 - **Labels from today.** Yahoo's sector and industry labels are current ones, applied to the past. The
   co-movement clusters don't have this problem.
 - **Large caps, US only.** Samsung and SK Hynix aren't in the universe.
